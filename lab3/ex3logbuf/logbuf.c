@@ -4,12 +4,14 @@
 #include <string.h>
 
 #define MAX_LOG_LENGTH 10
-#define MAX_BUFFER_SLOT 6
+#define MAX_BUFFER_SLOT 5
 #define MAX_LOOPS 30
 
 char logbuf[MAX_BUFFER_SLOT][MAX_LOG_LENGTH];
 
 int count;
+pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t log_cond = PTHREAD_COND_INITIALIZER; 
 void flushlog();
 
 struct _args
@@ -19,38 +21,53 @@ struct _args
 
 void *wrlog(void *data)
 {
-   char str[MAX_LOG_LENGTH];
-   int id = *(int*) data;
+    char str[MAX_LOG_LENGTH];
+    int id = *(int *)data;
 
-   usleep(20);
-   sprintf(str, "%d", id);
-   strcpy(logbuf[count], str);
-   count = (count > MAX_BUFFER_SLOT)? count :(count + 1); /* Only increase count to size MAX_BUFFER_SLOT*/
-   printf("wrlog(): %d \n", id);
+    usleep(20); // Mô phỏng độ trễ
+    sprintf(str, "%d", id);
 
-   return 0;
+    // Khóa mutex để truy cập buffer an toàn
+    pthread_mutex_lock(&log_mutex);
+
+    // Nếu buffer đầy, chờ đến khi được xóa
+    while (count >= MAX_BUFFER_SLOT) {
+        pthread_cond_wait(&log_cond, &log_mutex);
+    }
+
+    // Ghi dữ liệu vào buffer
+    strcpy(logbuf[count], str);
+    count++;
+    printf("wrlog(): %d\n", id);
+
+    pthread_mutex_unlock(&log_mutex); // Mở khóa mutex
+    return NULL;
 }
 
 void flushlog()
 {
-   int i;
-   char nullval[MAX_LOG_LENGTH];
+    int i;
+    char nullval[MAX_LOG_LENGTH];
 
-   printf("flushlog()\n");
-   sprintf(nullval, "%d", -1);
-   for (i = 0; i < count; i++)
-   {
-      printf("Slot  %i: %s\n", i, logbuf[i]);
-      strcpy(logbuf[i], nullval);
-   }
+    printf("flushlog()\n");
+    sprintf(nullval, "%d", -1);
 
-   fflush(stdout);
+    // Khóa mutex để truy cập buffer an toàn
+    pthread_mutex_lock(&log_mutex);
 
-   /*Reset buffer */
-   count = 0;
+    // In và xóa dữ liệu trong buffer
+    for (i = 0; i < count; i++) {
+        printf("Slot %i: %s\n", i, logbuf[i]);
+        strcpy(logbuf[i], nullval);
+    }
+    // đảm bảo dữ liệu được in ra màn hình
+    fflush(stdout);
 
-   return;
+    // Reset buffer và thông báo cho các thread đang chờ
+    count = 0;
+    pthread_cond_broadcast(&log_cond);
 
+    pthread_mutex_unlock(&log_mutex); // Mở khóa mutex
 }
 
 void *timer_start(void *args)
